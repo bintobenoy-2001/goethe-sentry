@@ -1,0 +1,313 @@
+{
+  "poll_min_seconds": 300,
+  "poll_max_seconds": 600,
+  "heartbeat_interval_hours": 6,
+  "targets": [
+    {
+      "label": "Bangalore Goethe B2",
+      "system": "standard_goethe",
+      "url": "https://www.goethe.de/ins/in/en/spr/prf/gzb2.cfm",
+      "course_keywords": [
+        "b2"
+      ],
+      "available_keywords": [
+        "register",
+        "anmelden",
+        "book",
+        "available",
+        "termin",
+        "buchen"
+      ],
+      "booked_keywords": [
+        "fully booked",
+        "ausgebucht",
+        "no seats",
+        "nicht verf\u00fcgbar",
+        "keine"
+      ],
+      "unknown_keywords": [
+        "sorry, our dates cannot be displayed temporarily. please try again later.",
+        "forbidden",
+        "session expired"
+      ],
+      "available_selectors": [],
+      "booked_selectors": [],
+      "wait_for_selectors": [
+        "section.exam-finder-app[data-app-instance-id]",
+        "section.exam-finder-app p.text-center.w-100.text-sm"
+      ],
+      "wait_timeout_ms": 12000,
+      "enabled": false
+    },
+    {
+      "label": "Mumbai Goethe B2",
+      "system": "standard_goethe",
+      "url": "https://www.goethe.de/ins/in/en/spr/prf/gzb2.cfm",
+      "course_keywords": [
+        "b2"
+      ],
+      "available_keywords": [
+        "register",
+        "anmelden",
+        "book",
+        "available",
+        "termin",
+        "buchen"
+      ],
+      "booked_keywords": [
+        "fully booked",
+        "ausgebucht",
+        "no seats",
+        "nicht verf\u00fcgbar",
+        "keine"
+      ],
+      "unknown_keywords": [
+        "sorry, our dates cannot be displayed temporarily. please try again later.",
+        "forbidden",
+        "session expired"
+      ],
+      "available_selectors": [],
+      "booked_selectors": [],
+      "wait_for_selectors": [
+        "section.exam-finder-app[data-app-instance-id]",
+        "section.exam-finder-app p.text-center.w-100.text-sm"
+      ],
+      "wait_timeout_ms": 12000,
+      "enabled": false
+    },
+    {
+      "label": "Chennai Goethe B2",
+      "system": "standard_goethe",
+      "url": "https://www.goethe.de/ins/in/en/spr/prf/gzb2.cfm",
+      "course_keywords": [
+        "b2"
+      ],
+      "available_keywords": [
+        "register",
+        "anmelden",
+        "book",
+        "available",
+        "termin",
+        "buchen"
+      ],
+      "booked_keywords": [
+        "fully booked",
+        "ausgebucht",
+        "no seats",
+        "nicht verf\u00fcgbar",
+        "keine"
+      ],
+      "unknown_keywords": [
+        "sorry, our dates cannot be displayed temporarily. please try again later.",
+        "forbidden",
+        "session expired"
+      ],
+      "available_selectors": [],
+      "booked_selectors": [],
+      "wait_for_selectors": [
+        "section.exam-finder-app[data-app-instance-id]",
+        "section.exam-finder-app p.text-center.w-100.text-sm"
+      ],
+      "wait_timeout_ms": 12000,
+      "enabled": false
+    },
+    {
+      "label": "Delhi Goethe B2",
+      "system": "standard_goethe",
+      "url": "https://www.goethe.de/ins/in/en/spr/prf/gzb2.cfm",
+      "course_keywords": [
+        "b2"
+      ],
+      "available_keywords": [
+        "register",
+        "anmelden",
+        "book",
+        "available",
+        "termin",
+        "buchen"
+      ],
+      "booked_keywords": [
+        "fully booked",
+        "ausgebucht",
+        "no seats",
+        "nicht verf\u00fcgbar",
+        "keine"
+      ],
+      "unknown_keywords": [
+        "sorry, our dates cannot be displayed temporarily. please try again later.",
+        "forbidden",
+        "session expired"
+      ],
+      "available_selectors": [],
+      "booked_selectors": [],
+      "wait_for_selectors": [
+        "section.exam-finder-app[data-app-instance-id]",
+        "section.exam-finder-app p.text-center.w-100.text-sm"
+      ],
+      "wait_timeout_ms": 12000,
+      "enabled": false
+    },
+    {
+      "label": "Pune Goethe B2",
+      "system": "standard_goethe",
+      "url": "https://www.goethe.de/ins/in/en/spr/prf/gzb2.cfm",
+      "course_keywords": [
+        "b2"
+      ],
+      "available_keywords": [
+        "register",
+        "anmelden",
+        "book",
+        "available",
+        "termin",
+        "buchen"
+      ],
+      "booked_keywords": [
+        "fully booked",
+        "ausgebucht",
+        "no seats",
+        "nicht verf\u00fcgbar",
+        "keine"
+      ],
+      "unknown_keywords": [
+        "sorry, our dates cannot be displayed temporarily. please try again later.",
+        "forbidden",
+        "session expired"
+      ],
+      "available_selectors": [],
+      "booked_selectors": [],
+      "wait_for_selectors": [
+        "section.exam-finder-app[data-app-instance-id]",
+        "section.exam-finder-app p.text-center.w-100.text-sm"
+      ],
+      "wait_timeout_ms": 12000,
+      "enabled": false
+    },
+    {
+      "label": "Kolkata Goethe B2",
+      "system": "standard_goethe",
+      "url": "https://www.goethe.de/ins/in/en/spr/prf/gzb2.cfm",
+      "course_keywords": [
+        "b2"
+      ],
+      "available_keywords": [
+        "register",
+        "anmelden",
+        "book",
+        "available",
+        "termin",
+        "buchen"
+      ],
+      "booked_keywords": [
+        "fully booked",
+        "ausgebucht",
+        "no seats",
+        "nicht verf\u00fcgbar",
+        "keine"
+      ],
+      "unknown_keywords": [
+        "sorry, our dates cannot be displayed temporarily. please try again later.",
+        "forbidden",
+        "session expired"
+      ],
+      "available_selectors": [],
+      "booked_selectors": [],
+      "wait_for_selectors": [
+        "section.exam-finder-app[data-app-instance-id]",
+        "section.exam-finder-app p.text-center.w-100.text-sm"
+      ],
+      "wait_timeout_ms": 12000,
+      "enabled": false
+    },
+    {
+      "label": "Trivandrum Goethe Partner",
+      "system": "partner_portal",
+      "url": "https://trivandrum.german.in/#examSection",
+      "course_keywords": [
+        "b2"
+      ],
+      "available_keywords": [
+        "register for exam",
+        "exam batches"
+      ],
+      "booked_keywords": [
+        "blocked",
+        "full"
+      ],
+      "unknown_keywords": [
+        "server error"
+      ],
+      "available_selectors": [
+        ".exam-batches .course-card .seats-external",
+        ".exam-batches .course-card .btn-pay-external-exam"
+      ],
+      "booked_selectors": [
+        ".exam-batches .course-card .seats-blocked-wrapper"
+      ],
+      "wait_for_selectors": [
+        "#examSection",
+        ".exam-batches .course-card"
+      ],
+      "interaction_steps": [
+        {
+          "action": "select",
+          "selector": "#cmbExamCentre",
+          "value": "1",
+          "wait_for_request_contains": "/home-exams?cmbcentre=1",
+          "wait_for_selectors": [
+            ".exam-batches .course-card"
+          ],
+          "post_delay_ms": 1500
+        }
+      ],
+      "detail_probe_max_batches": 2,
+      "wait_timeout_ms": 12000,
+      "enabled": true
+    },
+    {
+      "label": "Kochi Goethe Partner",
+      "system": "partner_portal",
+      "url": "https://trivandrum.german.in/#examSection",
+      "course_keywords": [
+        "b2"
+      ],
+      "available_keywords": [
+        "register for exam",
+        "exam batches"
+      ],
+      "booked_keywords": [
+        "blocked",
+        "full"
+      ],
+      "unknown_keywords": [
+        "server error"
+      ],
+      "available_selectors": [
+        ".exam-batches .course-card .seats-external",
+        ".exam-batches .course-card .btn-pay-external-exam"
+      ],
+      "booked_selectors": [
+        ".exam-batches .course-card .seats-blocked-wrapper"
+      ],
+      "wait_for_selectors": [
+        "#examSection",
+        ".exam-batches .course-card"
+      ],
+      "interaction_steps": [
+        {
+          "action": "select",
+          "selector": "#cmbExamCentre",
+          "value": "3",
+          "wait_for_request_contains": "/home-exams?cmbcentre=3",
+          "wait_for_selectors": [
+            ".exam-batches .course-card"
+          ],
+          "post_delay_ms": 1500
+        }
+      ],
+      "detail_probe_max_batches": 2,
+      "wait_timeout_ms": 12000,
+      "enabled": true
+    }
+  ]
+}

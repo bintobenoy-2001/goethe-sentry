@@ -5,7 +5,7 @@ Local async daemon for monitoring Goethe Institute booking pages and sending Tel
 The current target defaults reflect two different live systems:
 
 - Standard Goethe India B2 page: shared page for Bangalore, Mumbai, Chennai, Delhi, Pune, Kolkata. Current live state is an error surface and Akamai blocks direct API access, so these targets are present but disabled by default.
-- Partner portal: Trivandrum/Kochi share `https://trivandrum.german.in/#examSection` and have working DOM selectors for list-level monitoring. These are enabled by default.
+- Partner portal: an India center dropdown is discovered live from `https://trivandrum.german.in/#examSection`. At the time of implementation, the live source exposes `Trivandrum` and `Kochi`. `Kolhapur` is pinned in config and reported as `missing_on_site` because it is not currently present in the source.
 
 ## Files
 
@@ -19,6 +19,7 @@ The current target defaults reflect two different live systems:
 - `run.sh`: launcher
 
 Targets can also define `interaction_steps` for shared portals where a dropdown or click is required before the correct centre-specific exam list appears.
+Partner-portal targets can define `center_discovery` so the bot expands discovered centers dynamically without code changes.
 
 ## Setup
 
@@ -84,7 +85,7 @@ The launcher will:
 
 The repository also includes `.github/workflows/sentry.yml` for a zero-infra one-shot mode:
 
-- runs every 10 minutes on GitHub-hosted runners
+- runs every 5 minutes on GitHub-hosted runners
 - executes `python check_once.py`
 - exits after one pass
 - restores and saves `logs/state.json` through the Actions cache
@@ -107,11 +108,15 @@ Notes:
 - The one-shot workflow does not send startup or shutdown messages every run.
 - Alert suppression and recovery detection still work because the cached `logs/state.json` is reused across runs.
 - If the state cache is ever missed, the next run behaves like a cold start and may resend currently-available targets once.
+- `workflow_dispatch` supports optional `debug_logging` and `dry_run` inputs for test runs.
+- `workflow_dispatch` also supports `center_scope` and `selected_centers` so you can run all discovered India centers, only pinned centers, or only a specific list like `Kolhapur`.
 
 ## Current Live Caveats
 
 - Standard Goethe currently exposes a shared India B2 page at `https://www.goethe.de/ins/in/en/spr/prf/gzb2.cfm`.
 - The exam widget currently shows `Sorry, our dates cannot be displayed temporarily. Please try again later.` and the underlying `examfinderv3` API returned `403 Forbidden` during investigation.
 - Those standard Goethe targets are intentionally disabled in `config/targets.json` until you validate selectors or solve the Akamai gate from your own environment.
-- Trivandrum/Kochi partner portal selectors are wired in and are the only enabled defaults.
-- Trivandrum and Kochi now use config-driven browser interactions to select centre `1` and `3` respectively via `#cmbExamCentre` before extraction.
+- The partner portal now discovers India centers from the live `#cmbExamCentre` dropdown at runtime.
+- Current discovered India centers from the live source: `Trivandrum`, `Kochi`.
+- `Kolhapur` is pinned in config but currently absent from the live source, so it is tracked as `missing_on_site`.
+- If new centers appear in that dropdown later, they can be monitored automatically when `include_centers` is set to `all`.

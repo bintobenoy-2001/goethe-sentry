@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import copy
 import json
 import logging
+import os
 import random
 import sys
 import time
@@ -16,7 +18,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-from browser import InteractionStep, fetch_page
+from browser import CenterDiscoveryResult, InteractionStep, discover_partner_centers, fetch_page
 from detector import DEFAULT_AVAILABLE_SELECTORS, DEFAULT_BOOKED_SELECTORS, detect_slot
 from notifier import TelegramNotifier
 from state import StateStore
@@ -27,6 +29,8 @@ LOG_DIR = PROJECT_ROOT / "logs"
 SCREENSHOT_DIR = LOG_DIR / "screenshots"
 STATE_PATH = LOG_DIR / "state.json"
 CONFIG_PATH = PROJECT_ROOT / "config" / "targets.json"
+FAILURE_ALERT_THRESHOLD = 3
+TARGET_RETRY_BACKOFFS = (5, 15)
 
 
 class KeyValueFormatter(logging.Formatter):
@@ -80,7 +84,8 @@ def configure_logging() -> logging.Logger:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     formatter = KeyValueFormatter()
     root = logging.getLogger("goethe_sentry")
-    root.setLevel(logging.INFO)
+    level_name = os.getenv("SENTRY_LOG_LEVEL", "INFO").upper()
+    root.setLevel(getattr(logging, level_name, logging.INFO))
     root.handlers.clear()
 
     console = logging.StreamHandler(sys.stdout)
@@ -148,6 +153,12 @@ def build_interaction_steps(target: dict[str, Any]) -> list[InteractionStep]:
     return steps
 
 
+def normalize_center_name(name: str) -> str:
+    """Normalize center names for stable comparisons."""
+
+    return "".join(ch.lower() for ch in name if ch.isalnum())
+
+
 def env_or_raise(name: str) -> str:
     """Load a required environment variable."""
 
@@ -178,12 +189,237 @@ def should_rate_limit(last_alert_sent: str | None, window_seconds: int = 300) ->
     return datetime.now(timezone.utc) - last_dt < timedelta(seconds=window_seconds)
 
 
+def _diagnostics_dir(label: str) -> Path:
+    """Return the diagnostics directory for a target."""
+
+    return LOG_DIR / "diagnostics" / label.replace(" ", "_")
+
+
+def save_failure_diagnostics(
+    label: str,
+    result: Any | None,
+    error_message: str,
+    state_snapshot: dict[str, Any],
+    logger: logging.Logger,
+) -> None:
+    """Persist concise diagnostics for a failed target run."""
+
+    diag_dir = _diagnostics_dir(label)
+    diag_dir.mkdir(parents=True, exist_ok=True)
+    html_path = diag_dir / "latest.html"
+    json_path = diag_dir / "latest.json"
+    if result and getattr(result, "raw_html", ""):
+        html_path.write_text(result.raw_html, encoding="utf-8")
+    payload = {
+        "label": label,
+        "error": error_message,
+        "saved_at": datetime.now(timezone.utc).isoformat(),
+        "screenshot_path": getattr(result, "screenshot_path", None) if result else None,
+        "load_time_ms": getattr(result, "load_time_ms", None) if result else None,
+        "page_title": getattr(result, "page_title", None) if result else None,
+        "state": state_snapshot,
+    }
+    json_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    logger.info("failure_diagnostics_saved", extra={"label": label, "json_path": str(json_path), "html_path": str(html_path)})
+
+
+def save_discovery_diagnostics(
+    label: str,
+    result: CenterDiscoveryResult,
+    summary: dict[str, Any],
+    logger: logging.Logger,
+) -> None:
+    """Persist discovery diagnostics for failed or partial center discovery."""
+
+    diag_dir = _diagnostics_dir(label)
+    diag_dir.mkdir(parents=True, exist_ok=True)
+    (diag_dir / "centers_latest.html").write_text(result.raw_html, encoding="utf-8")
+    (diag_dir / "centers_latest.txt").write_text(result.visible_text, encoding="utf-8")
+    (diag_dir / "centers_latest.json").write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
+    logger.info("center_discovery_diagnostics_saved", extra={"label": label, "diag_dir": str(diag_dir)})
+
+
+def resolve_center_selection(
+    discovered_names: list[str],
+    discovery_cfg: dict[str, Any],
+) -> list[str]:
+    """Resolve which discovered/configured centers should be monitored for this run."""
+
+    scope = os.getenv("SENTRY_CENTER_SCOPE", "").strip().lower()
+    selected_env = [item.strip() for item in os.getenv("SENTRY_SELECTED_CENTERS", "").split(",") if item.strip()]
+    if scope == "selected" and selected_env:
+        return selected_env
+
+    config_override = list(discovery_cfg.get("allowlist_override", []))
+    if config_override:
+        return config_override
+
+    if scope == "pinned":
+        return list(discovery_cfg.get("pinned_centers", []))
+
+    include_centers = discovery_cfg.get("include_centers", "all")
+    if include_centers == "all":
+        return discovered_names
+    if isinstance(include_centers, list):
+        return list(include_centers)
+    return discovered_names
+
+
+async def resolve_targets(
+    config: dict[str, Any],
+    state_store: StateStore,
+    notifier: TelegramNotifier,
+    logger: logging.Logger,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Resolve enabled targets, expanding partner-center discovery templates."""
+
+    resolved_targets: list[dict[str, Any]] = []
+    run_summary: dict[str, Any] = {
+        "checked_centers": [],
+        "missing_on_site": [],
+        "newly_added_centers": [],
+        "removed_centers": [],
+        "could_not_parse_centers": [],
+    }
+    for target in active_targets(config):
+        discovery_cfg = target.get("center_discovery")
+        if not discovery_cfg:
+            resolved_targets.append(target)
+            continue
+
+        discovery_result = await discover_partner_centers(
+            url=target["url"],
+            screenshot_dir=SCREENSHOT_DIR / "center_discovery",
+            select_selector=discovery_cfg.get("selector", "#cmbExamCentre"),
+            wait_for_selectors=build_wait_selectors(target),
+            logger=logger,
+            timeout_ms=int(target.get("page_timeout_ms", 45_000)),
+        )
+        aux_key = f"__center_discovery__::{target['label']}"
+        discovered_centers = [
+            center.name
+            for center in discovery_result.centers
+            if center.value and center.value != "0" and center.name and "select" not in center.name.lower()
+        ]
+        discovered_map = {normalize_center_name(center.name): center for center in discovery_result.centers if center.value and center.value != "0" and center.name}
+        prev_summary = await state_store.update_aux_state(
+            aux_key,
+            {
+                "discovered_centers": discovered_centers,
+                "last_error": discovery_result.error,
+                "last_run_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        prev_discovered = list(prev_summary.get("discovered_centers", []))
+        selected_centers = resolve_center_selection(discovered_centers, discovery_cfg)
+        pinned_centers = list(discovery_cfg.get("pinned_centers", []))
+        expected_centers = sorted(set(selected_centers + pinned_centers))
+        missing_on_site = [
+            center for center in expected_centers if normalize_center_name(center) not in discovered_map
+        ]
+        newly_added = [center for center in discovered_centers if center not in prev_discovered]
+        removed = [center for center in prev_discovered if center not in discovered_centers]
+        run_summary["missing_on_site"].extend(missing_on_site)
+        run_summary["newly_added_centers"].extend(newly_added)
+        run_summary["removed_centers"].extend(removed)
+
+        if discovery_result.error:
+            run_summary["could_not_parse_centers"].append(target["label"])
+            save_discovery_diagnostics(
+                target["label"],
+                discovery_result,
+                {
+                    "error": discovery_result.error,
+                    "discovered_centers": discovered_centers,
+                    "missing_on_site": missing_on_site,
+                },
+                logger,
+            )
+            logger.warning(
+                "center_discovery_failed",
+                extra={"label": target["label"], "error": discovery_result.error},
+            )
+            continue
+
+        prev_missing = set(prev_summary.get("missing_on_site", []))
+        await state_store.update_aux_state(
+            aux_key,
+            {
+                "discovered_centers": discovered_centers,
+                "missing_on_site": missing_on_site,
+                "last_error": None,
+                "last_run_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+
+        for center_name in discovered_centers:
+            if normalize_center_name(center_name) not in {normalize_center_name(item) for item in selected_centers}:
+                continue
+            center_info = discovered_map[normalize_center_name(center_name)]
+            derived_target = copy.deepcopy(target)
+            derived_target["label"] = f"{center_name} Goethe Partner"
+            derived_target["resolved_center_name"] = center_name
+            derived_target["center_value"] = center_info.value
+            derived_target["interaction_steps"] = [
+                {
+                    "action": "select",
+                    "selector": discovery_cfg.get("selector", "#cmbExamCentre"),
+                    "value": center_info.value,
+                    "wait_for_request_contains": f"/home-exams?cmbcentre={center_info.value}",
+                    "wait_for_selectors": [".exam-batches .course-card"],
+                    "post_delay_ms": 1500,
+                }
+            ]
+            resolved_targets.append(derived_target)
+            run_summary["checked_centers"].append(center_name)
+
+            if center_name in pinned_centers and center_name in prev_missing:
+                await notifier.send_alert(
+                    "\n".join(
+                        [
+                            f"📍 Configured Center Discovered — {center_name}",
+                            f"Source: {target['url']}",
+                            f"⏰ Detected: {datetime.now(timezone.utc).isoformat()}",
+                        ]
+                    )
+                )
+                logger.info("configured_center_discovered", extra={"center": center_name})
+
+        for center_name in discovered_centers:
+            if center_name in prev_missing and center_name in pinned_centers:
+                await notifier.send_alert(
+                    "\n".join(
+                        [
+                            f"✅ Missing Center Recovered — {center_name}",
+                            f"Source: {target['url']}",
+                            f"⏰ Detected: {datetime.now(timezone.utc).isoformat()}",
+                        ]
+                    )
+                )
+                logger.info("missing_center_recovered", extra={"center": center_name})
+
+        logger.info(
+            "center_discovery_summary",
+            extra={
+                "label": target["label"],
+                "country": discovery_cfg.get("country", "India"),
+                "discovered_centers": discovered_centers,
+                "selected_centers": selected_centers,
+                "missing_on_site": missing_on_site,
+                "newly_added_centers": newly_added,
+                "removed_centers": removed,
+            },
+        )
+
+    return resolved_targets, run_summary
+
+
 async def process_target(
     target: dict[str, Any],
     state_store: StateStore,
     notifier: TelegramNotifier,
     logger: logging.Logger,
-) -> None:
+) -> dict[str, str]:
     """Run one monitoring cycle for a single target."""
 
     label = target["label"]
@@ -199,13 +435,39 @@ async def process_target(
         detail_probe_max_batches=int(target.get("detail_probe_max_batches", 0)),
         wait_for_selectors=build_wait_selectors(target),
         wait_timeout_ms=int(target.get("wait_timeout_ms", 12_000)),
+        timeout_ms=int(target.get("page_timeout_ms", 45_000)),
     )
+    if result.error:
+        update = await state_store.update_target_state(
+            label=label,
+            status="error",
+            signature="error",
+            detail_recovered=False,
+            last_error=result.error,
+            success=False,
+        )
+        logger.warning(
+            "target_fetch_error",
+            extra={"label": label, "error": result.error, "load_time_ms": result.load_time_ms},
+        )
+        save_failure_diagnostics(label, result, result.error, update.state, logger)
+        if update.warning_threshold_crossed:
+            await notifier.send_alert(
+                f"⚠️ Repeated failures — {label}\n"
+                f"Consecutive failures: {update.current_consecutive_failures}\n"
+                f"Last error: {result.error}\n"
+                f"⏰ Detected: {datetime.now(timezone.utc).isoformat()}"
+            )
+        return {"label": label, "status": "page_error"}
+
     detection = detect_slot(result, target, logger)
     update = await state_store.update_target_state(
         label=label,
         status=detection.status,
         signature=detection.signature,
         detail_recovered=detection.detail_recovered,
+        last_error=None,
+        success=True,
     )
 
     logger.info(
@@ -221,13 +483,6 @@ async def process_target(
         },
     )
 
-    if update.warning_threshold_crossed:
-        await notifier.send_alert(
-            f"⚠️ Detection warning — {label}\n"
-            "This target has returned unknown results more than 5 times in a row.\n"
-            f"Latest screenshot: {result.screenshot_path}"
-        )
-
     if detection.detail_recovered and not update.previous_detail_recovered:
         recovery_lines = [
             f"✅ Detail Endpoint Recovered — {label}",
@@ -239,16 +494,47 @@ async def process_target(
         await notifier.send_alert("\n".join(recovery_lines), photo_path=result.screenshot_path)
         logger.info("detail_endpoint_recovered", extra={"label": label})
 
+    recovered_from_error = update.previous_status == "error" and detection.status != "error"
+    if update.previous_status == "error" and detection.status != "error":
+        await notifier.send_alert(
+            "\n".join(
+                [
+                    f"✅ Recovered From Error — {label}",
+                    f"Status: {detection.status}",
+                    f"⏰ Detected: {datetime.now(timezone.utc).isoformat()}",
+                ]
+            ),
+            photo_path=result.screenshot_path,
+        )
+        logger.info("target_recovered_from_error", extra={"label": label, "status": detection.status})
+
+    if update.previous_status == "available" and detection.status != "available":
+        await notifier.send_alert(
+            "\n".join(
+                [
+                    f"ℹ️ Availability Changed — {label}",
+                    f"Status is now: {detection.status}",
+                    f"⏰ Detected: {datetime.now(timezone.utc).isoformat()}",
+                ]
+            ),
+            photo_path=result.screenshot_path,
+        )
+        logger.info("availability_changed", extra={"label": label, "status": detection.status})
+
     if detection.status != "available":
-        return
+        return {"label": label, "status": detection.status}
+
+    if recovered_from_error:
+        logger.info("availability_alert_skipped_recovery", extra={"label": label})
+        return {"label": label, "status": detection.status}
 
     if should_rate_limit(update.state.get("last_alert_sent")):
         logger.info("alert_rate_limited", extra={"label": label})
-        return
+        return {"label": label, "status": detection.status}
 
     if update.previous_status == "available" and update.previous_signature == detection.signature:
         logger.info("alert_skipped_same_state", extra={"label": label})
-        return
+        return {"label": label, "status": detection.status}
 
     timestamp = datetime.now(timezone.utc).isoformat()
     lines = [
@@ -264,6 +550,53 @@ async def process_target(
     message = "\n".join(lines)
     await notifier.send_alert(message, photo_path=result.screenshot_path)
     await state_store.mark_alert_sent(label)
+    return {"label": label, "status": detection.status}
+
+
+async def run_target_with_retries(
+    target: dict[str, Any],
+    state_store: StateStore,
+    notifier: TelegramNotifier,
+    logger: logging.Logger,
+) -> dict[str, str]:
+    """Run one target with bounded retries for transient exceptions."""
+
+    label = target["label"]
+    max_retries = 2
+    for attempt in range(max_retries + 1):
+        try:
+            return await process_target(target, state_store, notifier, logger)
+        except Exception as exc:
+            is_last_attempt = attempt >= max_retries
+            logger.exception(
+                "target_cycle_failed",
+                extra={"label": label, "error": str(exc), "attempt": attempt + 1},
+            )
+            if is_last_attempt:
+                update = await state_store.update_target_state(
+                    label=label,
+                    status="error",
+                    signature="exception",
+                    detail_recovered=False,
+                    last_error=str(exc),
+                    success=False,
+                )
+                save_failure_diagnostics(label, None, str(exc), update.state, logger)
+                if update.warning_threshold_crossed:
+                    await notifier.send_alert(
+                        f"⚠️ Repeated failures — {label}\n"
+                        f"Consecutive failures: {update.current_consecutive_failures}\n"
+                        f"Last error: {exc}\n"
+                        f"⏰ Detected: {datetime.now(timezone.utc).isoformat()}"
+                    )
+                return {"label": label, "status": "extraction_failed"}
+            backoff_seconds = TARGET_RETRY_BACKOFFS[min(attempt, len(TARGET_RETRY_BACKOFFS) - 1)]
+            logger.info(
+                "target_retry_backoff",
+                extra={"label": label, "attempt": attempt + 1, "backoff_seconds": backoff_seconds},
+            )
+            await asyncio.sleep(backoff_seconds)
+    return {"label": label, "status": "extraction_failed"}
 
 
 async def run_once(config: dict[str, Any], logger: logging.Logger) -> None:
@@ -271,13 +604,22 @@ async def run_once(config: dict[str, Any], logger: logging.Logger) -> None:
 
     notifier = build_notifier(logger)
     state_store = StateStore(STATE_PATH)
-    targets = active_targets(config)
+    targets, discovery_summary = await resolve_targets(config, state_store, notifier, logger)
     logger.info("one_shot_started", extra={"targets": [target["label"] for target in targets]})
+    city_results: list[dict[str, str]] = []
     for target in targets:
-        try:
-            await process_target(target, state_store, notifier, logger)
-        except Exception as exc:
-            logger.exception("target_cycle_failed", extra={"label": target["label"], "error": str(exc)})
+        city_results.append(await run_target_with_retries(target, state_store, notifier, logger))
+    logger.info(
+        "run_summary",
+        extra={
+            "checked_centers": discovery_summary["checked_centers"],
+            "missing_on_site": discovery_summary["missing_on_site"],
+            "could_not_parse_centers": discovery_summary["could_not_parse_centers"],
+            "newly_added_centers": discovery_summary["newly_added_centers"],
+            "removed_centers": discovery_summary["removed_centers"],
+            "city_results": city_results,
+        },
+    )
 
 
 async def run_daemon(config: dict[str, Any], logger: logging.Logger) -> None:
@@ -299,11 +641,21 @@ async def run_daemon(config: dict[str, Any], logger: logging.Logger) -> None:
 
     try:
         while True:
+            targets, discovery_summary = await resolve_targets(config, state_store, notifier, logger)
+            city_results: list[dict[str, str]] = []
             for target in targets:
-                try:
-                    await process_target(target, state_store, notifier, logger)
-                except Exception as exc:
-                    logger.exception("target_cycle_failed", extra={"label": target["label"], "error": str(exc)})
+                city_results.append(await run_target_with_retries(target, state_store, notifier, logger))
+            logger.info(
+                "run_summary",
+                extra={
+                    "checked_centers": discovery_summary["checked_centers"],
+                    "missing_on_site": discovery_summary["missing_on_site"],
+                    "could_not_parse_centers": discovery_summary["could_not_parse_centers"],
+                    "newly_added_centers": discovery_summary["newly_added_centers"],
+                    "removed_centers": discovery_summary["removed_centers"],
+                    "city_results": city_results,
+                },
+            )
 
             now = time.monotonic()
             if now - last_heartbeat >= heartbeat_interval:

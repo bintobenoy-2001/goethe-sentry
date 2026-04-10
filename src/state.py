@@ -17,6 +17,8 @@ class StateUpdateResult:
     previous_status: str | None
     previous_signature: str | None
     previous_detail_recovered: bool
+    previous_consecutive_failures: int
+    current_consecutive_failures: int
     current_status: str
     warning_threshold_crossed: bool
     state: dict[str, Any]
@@ -37,12 +39,24 @@ class StateStore:
         async with self._lock:
             return self._read_unlocked()
 
+    async def update_aux_state(self, key: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Persist auxiliary state under a reserved key and return the previous value."""
+
+        async with self._lock:
+            data = self._read_unlocked()
+            previous = data.get(key, {})
+            data[key] = payload
+            self._write_unlocked(data)
+            return previous if isinstance(previous, dict) else {}
+
     async def update_target_state(
         self,
         label: str,
         status: str,
         signature: str | None = None,
         detail_recovered: bool | None = None,
+        last_error: str | None = None,
+        success: bool = False,
         last_alert_sent: str | None = None,
     ) -> StateUpdateResult:
         """Update a target state record and persist it."""
@@ -50,25 +64,28 @@ class StateStore:
         async with self._lock:
             data = self._read_unlocked()
             previous = data.get(label, {})
-            previous_unknowns = int(previous.get("consecutive_unknowns", 0))
-            consecutive_unknowns = previous_unknowns + 1 if status == "unknown" else 0
+            previous_failures = int(previous.get("consecutive_failures", 0))
+            current_failures = 0 if success else previous_failures + 1
             record = {
-                "status": status,
+                "last_status": status,
                 "last_signature": signature or previous.get("last_signature"),
                 "detail_recovered": detail_recovered if detail_recovered is not None else bool(previous.get("detail_recovered", False)),
-                "last_check": datetime.now(timezone.utc).isoformat(),
+                "last_success_at": datetime.now(timezone.utc).isoformat() if success else previous.get("last_success_at"),
+                "last_error": None if success else (last_error or previous.get("last_error")),
                 "last_alert_sent": last_alert_sent or previous.get("last_alert_sent"),
-                "consecutive_unknowns": consecutive_unknowns,
+                "consecutive_failures": current_failures,
                 "check_count": int(previous.get("check_count", 0)) + 1,
             }
             data[label] = record
             self._write_unlocked(data)
             return StateUpdateResult(
-                previous_status=previous.get("status"),
+                previous_status=previous.get("last_status", previous.get("status")),
                 previous_signature=previous.get("last_signature"),
                 previous_detail_recovered=bool(previous.get("detail_recovered", False)),
+                previous_consecutive_failures=previous_failures,
+                current_consecutive_failures=current_failures,
                 current_status=status,
-                warning_threshold_crossed=previous_unknowns <= 5 < consecutive_unknowns,
+                warning_threshold_crossed=previous_failures < 3 <= current_failures,
                 state=record,
             )
 
@@ -80,12 +97,13 @@ class StateStore:
             record = data.setdefault(
                 label,
                 {
-                    "status": "unknown",
+                    "last_status": "unknown",
                     "last_signature": None,
                     "detail_recovered": False,
-                    "last_check": None,
+                    "last_success_at": None,
+                    "last_error": None,
                     "last_alert_sent": None,
-                    "consecutive_unknowns": 0,
+                    "consecutive_failures": 0,
                     "check_count": 0,
                 },
             )

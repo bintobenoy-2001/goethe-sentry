@@ -220,12 +220,23 @@
       "enabled": false
     },
     {
-      "label": "Trivandrum Goethe Partner",
+      "label": "India Goethe Partner B2",
       "system": "partner_portal",
       "url": "https://trivandrum.german.in/#examSection",
       "course_keywords": [
         "b2"
       ],
+      "center_discovery": {
+        "country": "India",
+        "include_centers": "all",
+        "allowlist_override": [],
+        "pinned_centers": [
+          "Kochi",
+          "Trivandrum",
+          "Kolhapur"
+        ],
+        "selector": "#cmbExamCentre"
+      },
       "available_keywords": [
         "register for exam",
         "exam batches"
@@ -246,67 +257,12 @@
       ],
       "wait_for_selectors": [
         "#examSection",
-        ".exam-batches .course-card"
-      ],
-      "interaction_steps": [
-        {
-          "action": "select",
-          "selector": "#cmbExamCentre",
-          "value": "1",
-          "wait_for_request_contains": "/home-exams?cmbcentre=1",
-          "wait_for_selectors": [
-            ".exam-batches .course-card"
-          ],
-          "post_delay_ms": 1500
-        }
+        ".exam-batches .course-card",
+        "#cmbExamCentre"
       ],
       "detail_probe_max_batches": 2,
       "wait_timeout_ms": 12000,
-      "enabled": true
-    },
-    {
-      "label": "Kochi Goethe Partner",
-      "system": "partner_portal",
-      "url": "https://trivandrum.german.in/#examSection",
-      "course_keywords": [
-        "b2"
-      ],
-      "available_keywords": [
-        "register for exam",
-        "exam batches"
-      ],
-      "booked_keywords": [
-        "blocked",
-        "full"
-      ],
-      "unknown_keywords": [
-        "server error"
-      ],
-      "available_selectors": [
-        ".exam-batches .course-card .seats-external",
-        ".exam-batches .course-card .btn-pay-external-exam"
-      ],
-      "booked_selectors": [
-        ".exam-batches .course-card .seats-blocked-wrapper"
-      ],
-      "wait_for_selectors": [
-        "#examSection",
-        ".exam-batches .course-card"
-      ],
-      "interaction_steps": [
-        {
-          "action": "select",
-          "selector": "#cmbExamCentre",
-          "value": "3",
-          "wait_for_request_contains": "/home-exams?cmbcentre=3",
-          "wait_for_selectors": [
-            ".exam-batches .course-card"
-          ],
-          "post_delay_ms": 1500
-        }
-      ],
-      "detail_probe_max_batches": 2,
-      "wait_timeout_ms": 12000,
+      "page_timeout_ms": 45000,
       "enabled": true
     }
   ]

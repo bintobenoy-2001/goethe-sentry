@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -21,14 +22,19 @@ class TelegramNotifier:
         self.logger = logger
         self.base_url = f"https://api.telegram.org/bot{bot_token}"
         self._timeout = httpx.Timeout(20.0)
+        self.dry_run = os.getenv("SENTRY_DRY_RUN", "").lower() in {"1", "true", "yes"}
 
     async def _post(self, endpoint: str, data: dict[str, Any], files: dict[str, Any] | None = None) -> None:
         """Send a request to Telegram with bounded retries."""
 
+        if self.dry_run:
+            self.logger.info("telegram_dry_run", extra={"endpoint": endpoint, "payload_keys": list(data.keys())})
+            return
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             for attempt in range(1, 4):
                 try:
-                    response = await client.post(f"{self.base_url}/{endpoint}", data=data, files=files)
+                    async with asyncio.timeout(25):
+                        response = await client.post(f"{self.base_url}/{endpoint}", data=data, files=files)
                     response.raise_for_status()
                     payload = response.json()
                     if not payload.get("ok", False):
@@ -86,6 +92,6 @@ class TelegramNotifier:
             if not target.get("enabled", True):
                 continue
             state = states.get(target["label"], {})
-            status = state.get("status", "unknown")
+            status = state.get("last_status", state.get("status", "unknown"))
             lines.append(f"📍 {target['label']}: still {status}")
         await self.send_alert("\n".join(lines))

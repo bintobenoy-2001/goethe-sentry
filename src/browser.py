@@ -106,6 +106,30 @@ class BatchDetailInfo:
     internal_seats_text: str
 
 
+@dataclass(slots=True)
+class CenterInfo:
+    """Center option extracted from a dropdown or similar page source."""
+
+    value: str
+    name: str
+
+
+@dataclass(slots=True)
+class CenterDiscoveryResult:
+    """Discovery result for partner-portal centers."""
+
+    centers: list[CenterInfo]
+    raw_html: str
+    visible_text: str
+    screenshot_path: str
+    page_title: str
+    load_time_ms: int
+    error: str | None
+
+
+SCREENSHOT_TIMEOUT_MS = 5_000
+
+
 def _random_viewport() -> dict[str, int]:
     """Return a realistic randomized viewport size."""
 
@@ -209,6 +233,29 @@ async def _extract_selector_matches(page: Page, selectors: list[str]) -> dict[st
     return matches
 
 
+async def _extract_select_options(page: Page, selector: str) -> list[CenterInfo]:
+    """Extract value/text pairs from a select element."""
+
+    payload: list[dict[str, str]] = await page.locator(selector).evaluate(
+        """
+        (node) => {
+          if (!(node instanceof HTMLSelectElement)) {
+            return [];
+          }
+          return Array.from(node.options).map((opt) => ({
+            value: opt.value || '',
+            name: (opt.textContent || '').trim(),
+          }));
+        }
+        """
+    )
+    return [
+        CenterInfo(value=item.get("value", ""), name=item.get("name", ""))
+        for item in payload
+        if item.get("value") is not None
+    ]
+
+
 async def _extract_exam_cards(
     page: Page,
     enriched_details: dict[int, list[BatchDetailInfo]] | None = None,
@@ -287,6 +334,27 @@ async def _extract_batch_detail_from_card(card_locator: Any) -> dict[str, str]:
         }
         """
     )
+
+
+async def _capture_screenshot(page: Page, screenshot_path: Path) -> bool:
+    """Capture a screenshot within a bounded timeout."""
+
+    try:
+        async with asyncio.timeout(SCREENSHOT_TIMEOUT_MS / 1000):
+            await page.screenshot(path=str(screenshot_path), full_page=True)
+        return True
+    except Exception:
+        return False
+
+
+async def _capture_html(page: Page) -> str:
+    """Capture page HTML without letting failures mask the original error."""
+
+    try:
+        async with asyncio.timeout(5):
+            return await page.content()
+    except Exception:
+        return ""
 
 
 async def _enrich_partner_exam_cards(
@@ -530,7 +598,7 @@ async def fetch_page(
                     if matched_wait_selector:
                         selector_matches[f"__wait__:{matched_wait_selector}"] = 1
                     page_title = await page.title()
-                    await page.screenshot(path=str(screenshot_path), full_page=True)
+                    await _capture_screenshot(page, screenshot_path)
                     load_time_ms = int((time.perf_counter() - start) * 1000)
                     return PageResult(
                         raw_html=raw_html,
@@ -546,10 +614,8 @@ async def fetch_page(
                     )
                 except Exception as exc:
                     load_time_ms = int((time.perf_counter() - start) * 1000)
-                    try:
-                        await page.screenshot(path=str(screenshot_path), full_page=True)
-                    except Exception:
-                        pass
+                    raw_html = await _capture_html(page)
+                    await _capture_screenshot(page, screenshot_path)
                     logger.warning(
                         "browser_attempt_failed",
                         extra={
@@ -561,7 +627,7 @@ async def fetch_page(
                     )
                     if attempt >= max_attempts:
                         return PageResult(
-                            raw_html="",
+                            raw_html=raw_html,
                             visible_text="",
                             buttons=[],
                             links=[],
@@ -572,7 +638,77 @@ async def fetch_page(
                             selector_matches={selector: 0 for selector in selectors},
                             exam_cards=[],
                         )
-                    await asyncio.sleep(2 ** (attempt - 1))
+                    backoff_seconds = min(15, 2 ** attempt)
+                    logger.info(
+                        "browser_retry_backoff",
+                        extra={"attempt": attempt, "url": url, "backoff_seconds": backoff_seconds},
+                    )
+                    await asyncio.sleep(backoff_seconds)
+                finally:
+                    await page.close()
+                    await context.close()
+        finally:
+            await browser.close()
+
+
+async def discover_partner_centers(
+    url: str,
+    screenshot_dir: Path,
+    select_selector: str,
+    wait_for_selectors: list[str],
+    logger: Any,
+    timeout_ms: int = 45_000,
+    max_attempts: int = 2,
+) -> CenterDiscoveryResult:
+    """Discover partner-portal centers from the live page."""
+
+    screenshot_dir.mkdir(parents=True, exist_ok=True)
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(headless=True)
+        try:
+            for attempt in range(1, max_attempts + 1):
+                context = await _build_context(browser)
+                page = await context.new_page()
+                screenshot_path = screenshot_dir / (
+                    f"centers_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}_{attempt}.png"
+                )
+                start = time.perf_counter()
+                try:
+                    await page.goto(url, wait_until="networkidle", timeout=timeout_ms)
+                    await _wait_for_any_selector(page, wait_for_selectors, 12_000)
+                    await asyncio.sleep(1.5)
+                    raw_html = await _capture_html(page)
+                    visible_text = await page.locator("body").inner_text()
+                    centers = await _extract_select_options(page, select_selector)
+                    page_title = await page.title()
+                    await _capture_screenshot(page, screenshot_path)
+                    return CenterDiscoveryResult(
+                        centers=centers,
+                        raw_html=raw_html,
+                        visible_text=visible_text,
+                        screenshot_path=str(screenshot_path),
+                        page_title=page_title,
+                        load_time_ms=int((time.perf_counter() - start) * 1000),
+                        error=None,
+                    )
+                except Exception as exc:
+                    raw_html = await _capture_html(page)
+                    await _capture_screenshot(page, screenshot_path)
+                    if attempt >= max_attempts:
+                        return CenterDiscoveryResult(
+                            centers=[],
+                            raw_html=raw_html,
+                            visible_text="",
+                            screenshot_path=str(screenshot_path),
+                            page_title="",
+                            load_time_ms=int((time.perf_counter() - start) * 1000),
+                            error=str(exc),
+                        )
+                    logger.warning(
+                        "center_discovery_attempt_failed",
+                        extra={"attempt": attempt, "url": url, "error": str(exc)},
+                    )
+                    await asyncio.sleep(2 ** attempt)
                 finally:
                     await page.close()
                     await context.close()

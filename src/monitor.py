@@ -18,7 +18,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-from browser import CenterDiscoveryResult, InteractionStep, discover_partner_centers, fetch_page
+from browser import CenterDiscoveryResult, InteractionStep, PageResult, discover_partner_centers, fetch_goethe_listing, fetch_page
 from detector import DEFAULT_AVAILABLE_SELECTORS, DEFAULT_BOOKED_SELECTORS, detect_slot
 from notifier import TelegramNotifier
 from state import StateStore
@@ -153,6 +153,12 @@ def build_interaction_steps(target: dict[str, Any]) -> list[InteractionStep]:
             )
         )
     return steps
+
+
+def target_system(target: dict[str, Any]) -> str | None:
+    """Return the normalized system type for a target."""
+
+    return target.get("system_type") or target.get("system")
 
 
 def normalize_center_name(name: str) -> str:
@@ -438,24 +444,30 @@ async def process_target(
     state_store: StateStore,
     notifier: TelegramNotifier,
     logger: logging.Logger,
+    preloaded_result: PageResult | None = None,
 ) -> dict[str, str]:
     """Run one monitoring cycle for a single target."""
 
     label = target["label"]
+    system = target_system(target)
+    previous_state = (await state_store.load()).get(label, {})
     selectors = build_required_selectors(target)
-    result = await fetch_page(
-        url=target["url"],
-        screenshot_dir=SCREENSHOT_DIR / label.replace(" ", "_"),
-        selectors=selectors,
-        logger=logger,
-        interaction_steps=build_interaction_steps(target),
-        system=target.get("system"),
-        course_keywords=list(target.get("course_keywords", [])),
-        detail_probe_max_batches=int(target.get("detail_probe_max_batches", 0)),
-        wait_for_selectors=build_wait_selectors(target),
-        wait_timeout_ms=int(target.get("wait_timeout_ms", 12_000)),
-        timeout_ms=int(target.get("page_timeout_ms", 45_000)),
-    )
+    result = preloaded_result
+    if result is None:
+        result = await fetch_page(
+            url=target["url"],
+            screenshot_dir=SCREENSHOT_DIR / label.replace(" ", "_"),
+            selectors=selectors,
+            logger=logger,
+            interaction_steps=build_interaction_steps(target),
+            system=system,
+            course_keywords=list(target.get("course_keywords", [])),
+            detail_probe_max_batches=int(target.get("detail_probe_max_batches", 0)),
+            wait_for_selectors=build_wait_selectors(target),
+            wait_timeout_ms=int(target.get("wait_timeout_ms", 12_000)),
+            timeout_ms=int(target.get("page_timeout_ms", 45_000)),
+            api_url=target.get("api_url"),
+        )
     if result.error:
         update = await state_store.update_target_state(
             label=label,
@@ -487,6 +499,7 @@ async def process_target(
         detail_recovered=detection.detail_recovered,
         last_error=None,
         success=True,
+        extra_fields={"page_signature": detection.page_signature} if detection.page_signature else None,
     )
 
     logger.info(
@@ -501,6 +514,25 @@ async def process_target(
             "load_time_ms": result.load_time_ms,
         },
     )
+
+    previous_page_signature = previous_state.get("page_signature")
+    if (
+        system == "goethe_listing"
+        and detection.page_signature
+        and previous_page_signature
+        and previous_page_signature != detection.page_signature
+        and detection.status == "unknown"
+    ):
+        await notifier.send_alert(
+            "\n".join(
+                [
+                    "⚠️ Goethe B2 page content changed but status unclear.",
+                    f"Check manually: {target['url']}",
+                    f"⏰ Detected: {datetime.now(timezone.utc).isoformat()}",
+                ]
+            )
+        )
+        logger.warning("standard_goethe_page_changed", extra={"label": label})
 
     if detection.detail_recovered and not update.previous_detail_recovered:
         recovery_lines = [
@@ -556,14 +588,29 @@ async def process_target(
         return {"label": label, "status": detection.status}
 
     timestamp = datetime.now(timezone.utc).isoformat()
-    lines = [
-        f"🚨 SLOT AVAILABLE — {label}\n"
-        "📅 Exam slot just opened!\n"
-        f"🔗 Book NOW: {target['url']}\n"
-        f"⏰ Detected: {timestamp}\n"
-        f"🔍 Method: {detection.method}\n"
-        f"📊 Confidence: {detection.confidence}"
-    ]
+    if system == "goethe_listing":
+        lines = [
+            f"🚨 SLOT OPEN — {label}!",
+            "",
+            f"An exam slot just appeared for {target.get('city_filter', label)}!",
+            "",
+            f"📅 Date: {next((line.split(': ', 1)[1] for line in detection.summary_lines or [] if line.startswith('📅 Date:')), 'Check page')}",
+            f"🏫 Format: {next((line.split(': ', 1)[1] for line in detection.summary_lines or [] if line.startswith('🏫 Format:')), 'Check page')}",
+            "",
+            f"🔗 View & Book NOW: {target['url']}",
+            "",
+            f"⏰ Detected: {timestamp}",
+            "⚡ Act fast — slots fill in under 5 minutes!",
+        ]
+    else:
+        lines = [
+            f"🚨 SLOT AVAILABLE — {label}\n"
+            "📅 Exam slot just opened!\n"
+            f"🔗 Book NOW: {target['url']}\n"
+            f"⏰ Detected: {timestamp}\n"
+            f"🔍 Method: {detection.method}\n"
+            f"📊 Confidence: {detection.confidence}"
+        ]
     if detection.summary_lines:
         lines.extend(detection.summary_lines[:5])
     message = "\n".join(lines)
@@ -577,6 +624,7 @@ async def run_target_with_retries(
     state_store: StateStore,
     notifier: TelegramNotifier,
     logger: logging.Logger,
+    preloaded_result: PageResult | None = None,
 ) -> dict[str, str]:
     """Run one target with bounded retries for transient exceptions."""
 
@@ -584,7 +632,7 @@ async def run_target_with_retries(
     max_retries = 2
     for attempt in range(max_retries + 1):
         try:
-            return await process_target(target, state_store, notifier, logger)
+            return await process_target(target, state_store, notifier, logger, preloaded_result=preloaded_result)
         except Exception as exc:
             is_last_attempt = attempt >= max_retries
             logger.exception(
@@ -625,9 +673,25 @@ async def run_once(config: dict[str, Any], logger: logging.Logger) -> None:
     state_store = StateStore(STATE_PATH)
     targets, discovery_summary = await resolve_targets(config, state_store, notifier, logger)
     logger.info("one_shot_started", extra={"targets": [target["label"] for target in targets]})
+    shared_results: dict[tuple[str, str], PageResult] = {}
     city_results: list[dict[str, str]] = []
     for target in targets:
-        city_results.append(await run_target_with_retries(target, state_store, notifier, logger))
+        shared_result: PageResult | None = None
+        system = target_system(target)
+        if system == "goethe_listing":
+            cache_key = (system, target["url"])
+            shared_result = shared_results.get(cache_key)
+            if shared_result is None:
+                logger.info("goethe_listing_page_load_started", extra={"url": target["url"]})
+                shared_result = await fetch_goethe_listing(
+                    target["url"],
+                    SCREENSHOT_DIR / "goethe_listing",
+                    logger,
+                    timeout_ms=int(target.get("page_timeout_ms", 45_000)),
+                )
+                shared_results[cache_key] = shared_result
+                logger.info("Loaded Goethe listing page once for all cities", extra={"url": target["url"]})
+        city_results.append(await run_target_with_retries(target, state_store, notifier, logger, preloaded_result=shared_result))
     logger.info(
         "run_summary",
         extra={
@@ -697,9 +761,25 @@ async def run_daemon(config: dict[str, Any], logger: logging.Logger) -> None:
     try:
         while True:
             targets, discovery_summary = await resolve_targets(config, state_store, notifier, logger)
+            shared_results: dict[tuple[str, str], PageResult] = {}
             city_results: list[dict[str, str]] = []
             for target in targets:
-                city_results.append(await run_target_with_retries(target, state_store, notifier, logger))
+                shared_result: PageResult | None = None
+                system = target_system(target)
+                if system == "goethe_listing":
+                    cache_key = (system, target["url"])
+                    shared_result = shared_results.get(cache_key)
+                    if shared_result is None:
+                        logger.info("goethe_listing_page_load_started", extra={"url": target["url"]})
+                        shared_result = await fetch_goethe_listing(
+                            target["url"],
+                            SCREENSHOT_DIR / "goethe_listing",
+                            logger,
+                            timeout_ms=int(target.get("page_timeout_ms", 45_000)),
+                        )
+                        shared_results[cache_key] = shared_result
+                        logger.info("Loaded Goethe listing page once for all cities", extra={"url": target["url"]})
+                city_results.append(await run_target_with_retries(target, state_store, notifier, logger, preloaded_result=shared_result))
             logger.info(
                 "run_summary",
                 extra={

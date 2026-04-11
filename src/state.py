@@ -58,6 +58,7 @@ class StateStore:
         last_error: str | None = None,
         success: bool = False,
         last_alert_sent: str | None = None,
+        extra_fields: dict[str, Any] | None = None,
     ) -> StateUpdateResult:
         """Update a target state record and persist it."""
 
@@ -76,6 +77,8 @@ class StateStore:
                 "consecutive_failures": current_failures,
                 "check_count": int(previous.get("check_count", 0)) + 1,
             }
+            if extra_fields:
+                record.update(extra_fields)
             data[label] = record
             self._write_unlocked(data)
             return StateUpdateResult(

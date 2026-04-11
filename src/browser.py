@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import httpx
 from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 
 
@@ -57,6 +58,9 @@ class PageResult:
     error: str | None
     selector_matches: dict[str, int] = field(default_factory=dict)
     exam_cards: list["CourseCardInfo"] = field(default_factory=list)
+    standard_api_result: "StandardGoetheApiResult | None" = None
+    page_signature_source: str = ""
+    all_cards: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -127,7 +131,44 @@ class CenterDiscoveryResult:
     error: str | None
 
 
+@dataclass(slots=True)
+class StandardGoetheExamInfo:
+    """Normalized exam metadata from the standard Goethe API."""
+
+    is_bookable: bool
+    seats_available: int | None
+    start_date: str | None
+    raw: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class StandardGoetheApiResult:
+    """API fetch result for a standard Goethe target."""
+
+    ok: bool
+    status_code: int | None
+    exams: list[StandardGoetheExamInfo] = field(default_factory=list)
+    error: str | None = None
+    raw_text: str | None = None
+
+
 SCREENSHOT_TIMEOUT_MS = 5_000
+COOKIE_CONSENT_TIMEOUT_MS = 10_000
+STANDARD_GOETHE_API_USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "Chrome/124.0.0.0 Safari/537.36"
+)
+COOKIE_CONSENT_SELECTORS = [
+    'button[data-testid="uc-accept-all-button"]',
+    "#usercentrics-root button:first-child",
+    "button.uc-accept-all",
+    'button:has-text("Accept All")',
+    'button:has-text("Alle akzeptieren")',
+    'button:has-text("Akzeptieren")',
+    'button[id*="accept"]',
+    'button[class*="accept"]',
+    'button[aria-label*="accept"]',
+]
 
 
 def _random_viewport() -> dict[str, int]:
@@ -357,6 +398,224 @@ async def _capture_html(page: Page) -> str:
         return ""
 
 
+async def _extract_page_signature_source(page: Page) -> str:
+    """Extract the content slice used for unified-page signature tracking."""
+
+    try:
+        payload: list[str] = await page.evaluate(
+            """
+            () => {
+              const selectors = "[class*='exam'], [class*='date'], [class*='prf'], [class*='termin'], table, .content-main";
+              const nodes = Array.from(document.querySelectorAll(selectors));
+              const texts = nodes
+                .map((node) => (node.innerText || node.textContent || '').trim())
+                .filter(Boolean);
+              return Array.from(new Set(texts));
+            }
+            """
+        )
+        return "\n\n".join(payload)
+    except Exception:
+        return ""
+
+
+async def _extract_listing_cards(page: Page) -> list[str]:
+    """Extract text blocks for the official Goethe listing cards."""
+
+    selectors = [".prf-search-result", "[class*='exam']"]
+    for selector in selectors:
+        try:
+            locator = page.locator(selector)
+            if await locator.count() == 0:
+                continue
+            payload = await locator.evaluate_all(
+                """
+                (nodes) => nodes
+                  .map((node) => (node.innerText || node.textContent || '').trim())
+                  .filter(Boolean)
+                """
+            )
+            if payload:
+                return payload
+        except Exception:
+            continue
+    return []
+
+
+def _build_standard_goethe_api_headers(referer: str, include_extended: bool = False) -> dict[str, str]:
+    """Build headers for the standard Goethe API."""
+
+    headers = {
+        "User-Agent": STANDARD_GOETHE_API_USER_AGENT,
+        "Referer": referer,
+        "Accept": "application/json",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    if include_extended:
+        headers.update(
+            {
+                "Cookie": "",
+                "Origin": "https://www.goethe.de",
+                "sec-fetch-site": "same-origin",
+                "sec-fetch-mode": "cors",
+            }
+        )
+    return headers
+
+
+async def fetch_standard_goethe_api(api_url: str, referer: str, logger: Any) -> StandardGoetheApiResult:
+    """Fetch the standard Goethe API using browser-like headers."""
+
+    attempt_headers = [
+        _build_standard_goethe_api_headers(referer, include_extended=False),
+        _build_standard_goethe_api_headers(referer, include_extended=True),
+    ]
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+        for index, headers in enumerate(attempt_headers, start=1):
+            try:
+                response = await client.get(api_url, headers=headers)
+                logger.info(
+                    "standard_goethe_api_attempt",
+                    extra={"api_url": api_url, "status_code": response.status_code, "attempt": index},
+                )
+                if response.status_code >= 400:
+                    if index < len(attempt_headers):
+                        continue
+                    return StandardGoetheApiResult(
+                        ok=False,
+                        status_code=response.status_code,
+                        error=f"HTTP {response.status_code}",
+                        raw_text=response.text[:4000],
+                    )
+
+                payload = response.json()
+                exams_payload = payload.get("exams", payload.get("DATA", []))
+                exams: list[StandardGoetheExamInfo] = []
+                for item in exams_payload:
+                    if isinstance(item, dict):
+                        exams.append(
+                            StandardGoetheExamInfo(
+                                is_bookable=bool(item.get("isBookable")),
+                                seats_available=item.get("seatsAvailable"),
+                                start_date=item.get("startDate"),
+                                raw=item,
+                            )
+                        )
+                return StandardGoetheApiResult(
+                    ok=True,
+                    status_code=response.status_code,
+                    exams=exams,
+                    raw_text=response.text[:4000],
+                )
+            except Exception as exc:
+                if index >= len(attempt_headers):
+                    return StandardGoetheApiResult(ok=False, status_code=None, error=str(exc))
+    return StandardGoetheApiResult(ok=False, status_code=None, error="API request did not complete")
+
+
+async def _accept_cookie_consent(page: Page, logger: Any) -> None:
+    """Try to accept the cookie banner without failing the run."""
+
+    for selector in COOKIE_CONSENT_SELECTORS:
+        try:
+            locator = page.locator(selector).first
+            await locator.wait_for(state="visible", timeout=COOKIE_CONSENT_TIMEOUT_MS)
+            await locator.click(timeout=2_000)
+            await page.wait_for_timeout(2_000)
+            logger.info("cookie_consent_accepted", extra={"selector": selector})
+            return
+        except Exception:
+            continue
+
+
+async def _prepare_standard_goethe_unified_page(page: Page, url: str, logger: Any) -> None:
+    """Load the unified Goethe page using the slower consent-aware sequence."""
+
+    await page.goto(url, wait_until="domcontentloaded", timeout=45_000)
+    await page.wait_for_timeout(3_000)
+    await _accept_cookie_consent(page, logger)
+    try:
+        await page.wait_for_load_state("networkidle", timeout=15_000)
+    except Exception:
+        logger.info("standard_goethe_unified_networkidle_timeout", extra={"url": url})
+    viewport = page.viewport_size or {"width": 1366, "height": 900}
+    width = viewport["width"]
+    height = viewport["height"]
+    await page.mouse.move(width // 2, max(120, height // 4), steps=16)
+    await page.mouse.wheel(0, max(320, height // 3))
+    await page.wait_for_timeout(1_500)
+    await page.mouse.wheel(0, max(320, height // 3))
+    await page.wait_for_timeout(3_000)
+
+
+async def fetch_goethe_listing(url: str, screenshot_dir: Path, logger: Any, timeout_ms: int = 45_000) -> PageResult:
+    """Load the unified official Goethe B2 listing page once and extract all data."""
+
+    screenshot_dir.mkdir(parents=True, exist_ok=True)
+    async with async_playwright() as playwright:
+        browser = await _launch_browser(playwright)
+        try:
+            context = await _build_context(browser)
+            page = await context.new_page()
+            screenshot_path = screenshot_dir / f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}.png"
+            start = time.perf_counter()
+            try:
+                await _prepare_standard_goethe_unified_page(page, url, logger)
+                listing_wait_selectors = [
+                    ".prf-search-result",
+                    ".exam-item",
+                    "[class*='exam-list']",
+                    "[class*='search-result']",
+                    'h2:has-text("EXAM DATES")',
+                ]
+                matched_wait_selector = await _wait_for_any_selector(page, listing_wait_selectors, 15_000)
+                if matched_wait_selector:
+                    logger.info("goethe_listing_container_found", extra={"selector": matched_wait_selector})
+                await page.mouse.wheel(0, 500)
+                await page.wait_for_timeout(2_000)
+                raw_html = await page.content()
+                visible_text = await page.locator("body").inner_text()
+                page_signature_source = await _extract_page_signature_source(page)
+                buttons = await _extract_buttons(page)
+                links = await _extract_links(page)
+                all_cards = await _extract_listing_cards(page)
+                page_title = await page.title()
+                await _capture_screenshot(page, screenshot_path)
+                load_time_ms = int((time.perf_counter() - start) * 1000)
+                return PageResult(
+                    raw_html=raw_html,
+                    visible_text=visible_text,
+                    buttons=buttons,
+                    links=links,
+                    screenshot_path=str(screenshot_path),
+                    page_title=page_title,
+                    load_time_ms=load_time_ms,
+                    error=None,
+                    page_signature_source=page_signature_source,
+                    all_cards=all_cards,
+                )
+            except Exception as exc:
+                raw_html = await _capture_html(page)
+                await _capture_screenshot(page, screenshot_path)
+                return PageResult(
+                    raw_html=raw_html,
+                    visible_text="",
+                    buttons=[],
+                    links=[],
+                    screenshot_path=str(screenshot_path),
+                    page_title="",
+                    load_time_ms=int((time.perf_counter() - start) * 1000),
+                    error=str(exc),
+                    page_signature_source="",
+                    all_cards=[],
+                )
+            finally:
+                await page.close()
+                await context.close()
+        finally:
+            await browser.close()
+
+
 async def _enrich_partner_exam_cards(
     page: Page,
     course_keywords: list[str],
@@ -541,6 +800,16 @@ async def _build_context(browser: Browser) -> BrowserContext:
     return context
 
 
+async def _launch_browser(playwright: Any) -> Browser:
+    """Launch Chromium with conservative flags for CI and sandboxed environments."""
+
+    return await playwright.chromium.launch(
+        headless=True,
+        chromium_sandbox=False,
+        args=["--disable-setuid-sandbox"],
+    )
+
+
 async def fetch_page(
     url: str,
     screenshot_dir: Path,
@@ -554,12 +823,16 @@ async def fetch_page(
     wait_timeout_ms: int = 12_000,
     timeout_ms: int = 45_000,
     max_attempts: int = 3,
+    api_url: str | None = None,
 ) -> PageResult:
     """Fetch a page with retries and return a normalized extraction result."""
 
     screenshot_dir.mkdir(parents=True, exist_ok=True)
+    standard_api_result: StandardGoetheApiResult | None = None
+    if system == "standard_goethe" and api_url:
+        standard_api_result = await fetch_standard_goethe_api(api_url, url, logger)
     async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch(headless=True)
+        browser = await _launch_browser(playwright)
         try:
             for attempt in range(1, max_attempts + 1):
                 context = await _build_context(browser)
@@ -570,7 +843,11 @@ async def fetch_page(
                 start = time.perf_counter()
                 try:
                     await asyncio.sleep(random.uniform(0.8, 2.0))
-                    await page.goto(url, wait_until="networkidle", timeout=timeout_ms)
+                    if system == "standard_goethe_unified":
+                        await _prepare_standard_goethe_unified_page(page, url, logger)
+                    else:
+                        await page.goto(url, wait_until="networkidle", timeout=timeout_ms)
+                        await _accept_cookie_consent(page, logger)
                     matched_wait_selector = await _wait_for_any_selector(
                         page,
                         wait_for_selectors or [],
@@ -582,6 +859,7 @@ async def fetch_page(
                     await _humanize_page(page)
                     raw_html = await page.content()
                     visible_text = await page.locator("body").inner_text()
+                    page_signature_source = await _extract_page_signature_source(page)
                     buttons = await _extract_buttons(page)
                     links = await _extract_links(page)
                     enriched_details: dict[int, list[BatchDetailInfo]] = {}
@@ -611,6 +889,9 @@ async def fetch_page(
                         error=None,
                         selector_matches=selector_matches,
                         exam_cards=exam_cards,
+                        standard_api_result=standard_api_result,
+                        page_signature_source=page_signature_source,
+                        all_cards=[],
                     )
                 except Exception as exc:
                     load_time_ms = int((time.perf_counter() - start) * 1000)
@@ -637,6 +918,9 @@ async def fetch_page(
                             error=str(exc),
                             selector_matches={selector: 0 for selector in selectors},
                             exam_cards=[],
+                            standard_api_result=standard_api_result,
+                            page_signature_source="",
+                            all_cards=[],
                         )
                     backoff_seconds = min(15, 2 ** attempt)
                     logger.info(
@@ -664,7 +948,7 @@ async def discover_partner_centers(
 
     screenshot_dir.mkdir(parents=True, exist_ok=True)
     async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch(headless=True)
+        browser = await _launch_browser(playwright)
         try:
             for attempt in range(1, max_attempts + 1):
                 context = await _build_context(browser)

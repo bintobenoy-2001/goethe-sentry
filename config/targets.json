@@ -1,269 +1,79 @@
 {
-  "poll_min_seconds": 300,
-  "poll_max_seconds": 600,
+  "poll_min_seconds": 90,
+  "poll_max_seconds": 180,
   "heartbeat_interval_hours": 6,
   "targets": [
     {
-      "label": "Bangalore Goethe B2",
-      "system": "standard_goethe",
+      "label": "Bangalore B2",
       "url": "https://www.goethe.de/ins/in/en/spr/prf/gzb2.cfm",
-      "course_keywords": [
-        "b2"
-      ],
-      "available_keywords": [
-        "register",
-        "anmelden",
-        "book",
-        "available",
-        "termin",
-        "buchen"
-      ],
-      "booked_keywords": [
-        "fully booked",
-        "ausgebucht",
-        "no seats",
-        "nicht verf\u00fcgbar",
-        "keine"
-      ],
-      "unknown_keywords": [
-        "sorry, our dates cannot be displayed temporarily. please try again later.",
-        "forbidden",
-        "session expired"
-      ],
-      "available_selectors": [],
-      "booked_selectors": [],
-      "wait_for_selectors": [
-        "section.exam-finder-app[data-app-instance-id]",
-        "section.exam-finder-app p.text-center.w-100.text-sm"
-      ],
-      "wait_timeout_ms": 12000,
-      "enabled": false
+      "system_type": "goethe_listing",
+      "city_filter": "Bangalore",
+      "enabled": true
     },
     {
-      "label": "Mumbai Goethe B2",
-      "system": "standard_goethe",
+      "label": "Mumbai B2",
       "url": "https://www.goethe.de/ins/in/en/spr/prf/gzb2.cfm",
-      "course_keywords": [
-        "b2"
-      ],
-      "available_keywords": [
-        "register",
-        "anmelden",
-        "book",
-        "available",
-        "termin",
-        "buchen"
-      ],
-      "booked_keywords": [
-        "fully booked",
-        "ausgebucht",
-        "no seats",
-        "nicht verf\u00fcgbar",
-        "keine"
-      ],
-      "unknown_keywords": [
-        "sorry, our dates cannot be displayed temporarily. please try again later.",
-        "forbidden",
-        "session expired"
-      ],
-      "available_selectors": [],
-      "booked_selectors": [],
-      "wait_for_selectors": [
-        "section.exam-finder-app[data-app-instance-id]",
-        "section.exam-finder-app p.text-center.w-100.text-sm"
-      ],
-      "wait_timeout_ms": 12000,
-      "enabled": false
+      "system_type": "goethe_listing",
+      "city_filter": "Mumbai",
+      "enabled": true
     },
     {
-      "label": "Chennai Goethe B2",
-      "system": "standard_goethe",
+      "label": "Chennai B2",
       "url": "https://www.goethe.de/ins/in/en/spr/prf/gzb2.cfm",
-      "course_keywords": [
-        "b2"
-      ],
-      "available_keywords": [
-        "register",
-        "anmelden",
-        "book",
-        "available",
-        "termin",
-        "buchen"
-      ],
-      "booked_keywords": [
-        "fully booked",
-        "ausgebucht",
-        "no seats",
-        "nicht verf\u00fcgbar",
-        "keine"
-      ],
-      "unknown_keywords": [
-        "sorry, our dates cannot be displayed temporarily. please try again later.",
-        "forbidden",
-        "session expired"
-      ],
-      "available_selectors": [],
-      "booked_selectors": [],
-      "wait_for_selectors": [
-        "section.exam-finder-app[data-app-instance-id]",
-        "section.exam-finder-app p.text-center.w-100.text-sm"
-      ],
-      "wait_timeout_ms": 12000,
-      "enabled": false
+      "system_type": "goethe_listing",
+      "city_filter": "Chennai",
+      "enabled": true
     },
     {
-      "label": "Delhi Goethe B2",
-      "system": "standard_goethe",
+      "label": "New Delhi B2",
       "url": "https://www.goethe.de/ins/in/en/spr/prf/gzb2.cfm",
-      "course_keywords": [
-        "b2"
-      ],
-      "available_keywords": [
-        "register",
-        "anmelden",
-        "book",
-        "available",
-        "termin",
-        "buchen"
-      ],
-      "booked_keywords": [
-        "fully booked",
-        "ausgebucht",
-        "no seats",
-        "nicht verf\u00fcgbar",
-        "keine"
-      ],
-      "unknown_keywords": [
-        "sorry, our dates cannot be displayed temporarily. please try again later.",
-        "forbidden",
-        "session expired"
-      ],
-      "available_selectors": [],
-      "booked_selectors": [],
-      "wait_for_selectors": [
-        "section.exam-finder-app[data-app-instance-id]",
-        "section.exam-finder-app p.text-center.w-100.text-sm"
-      ],
-      "wait_timeout_ms": 12000,
-      "enabled": false
+      "system_type": "goethe_listing",
+      "city_filter": "New Delhi",
+      "enabled": true
     },
     {
-      "label": "Pune Goethe B2",
-      "system": "standard_goethe",
+      "label": "Pune B2",
       "url": "https://www.goethe.de/ins/in/en/spr/prf/gzb2.cfm",
-      "course_keywords": [
-        "b2"
-      ],
-      "available_keywords": [
-        "register",
-        "anmelden",
-        "book",
-        "available",
-        "termin",
-        "buchen"
-      ],
-      "booked_keywords": [
-        "fully booked",
-        "ausgebucht",
-        "no seats",
-        "nicht verf\u00fcgbar",
-        "keine"
-      ],
-      "unknown_keywords": [
-        "sorry, our dates cannot be displayed temporarily. please try again later.",
-        "forbidden",
-        "session expired"
-      ],
-      "available_selectors": [],
-      "booked_selectors": [],
-      "wait_for_selectors": [
-        "section.exam-finder-app[data-app-instance-id]",
-        "section.exam-finder-app p.text-center.w-100.text-sm"
-      ],
-      "wait_timeout_ms": 12000,
-      "enabled": false
+      "system_type": "goethe_listing",
+      "city_filter": "Pune",
+      "enabled": true
     },
     {
-      "label": "Kolkata Goethe B2",
-      "system": "standard_goethe",
+      "label": "Kolkata B2",
       "url": "https://www.goethe.de/ins/in/en/spr/prf/gzb2.cfm",
-      "course_keywords": [
-        "b2"
-      ],
-      "available_keywords": [
-        "register",
-        "anmelden",
-        "book",
-        "available",
-        "termin",
-        "buchen"
-      ],
-      "booked_keywords": [
-        "fully booked",
-        "ausgebucht",
-        "no seats",
-        "nicht verf\u00fcgbar",
-        "keine"
-      ],
-      "unknown_keywords": [
-        "sorry, our dates cannot be displayed temporarily. please try again later.",
-        "forbidden",
-        "session expired"
-      ],
-      "available_selectors": [],
-      "booked_selectors": [],
-      "wait_for_selectors": [
-        "section.exam-finder-app[data-app-instance-id]",
-        "section.exam-finder-app p.text-center.w-100.text-sm"
-      ],
-      "wait_timeout_ms": 12000,
-      "enabled": false
+      "system_type": "goethe_listing",
+      "city_filter": "Kolkata",
+      "enabled": true
     },
     {
-      "label": "India Goethe Partner B2",
-      "system": "partner_portal",
-      "url": "https://trivandrum.german.in/#examSection",
-      "course_keywords": [
-        "b2"
-      ],
-      "center_discovery": {
-        "country": "India",
-        "include_centers": "all",
-        "allowlist_override": [],
-        "pinned_centers": [
-          "Kochi",
-          "Trivandrum",
-          "Kolhapur"
-        ],
-        "selector": "#cmbExamCentre"
-      },
-      "available_keywords": [
-        "register for exam",
-        "exam batches"
-      ],
-      "booked_keywords": [
-        "blocked",
-        "full"
-      ],
-      "unknown_keywords": [
-        "server error"
-      ],
+      "label": "Hyderabad B2",
+      "url": "https://hyderabad.german.in/",
+      "system_type": "partner_portal",
+      "city_filter": null,
+      "enabled": true,
       "available_selectors": [
-        ".exam-batches .course-card .seats-external",
-        ".exam-batches .course-card .btn-pay-external-exam"
+        "a.btn-pay",
+        "button.course-register-now"
       ],
       "booked_selectors": [
-        ".exam-batches .course-card .seats-blocked-wrapper"
+        ".text-danger"
       ],
-      "wait_for_selectors": [
-        "#examSection",
-        ".exam-batches .course-card",
-        "#cmbExamCentre"
+      "seats_selector": "td:nth-child(5)"
+    },
+    {
+      "label": "Trivandrum B2",
+      "url": "https://trivandrum.german.in/",
+      "system_type": "partner_portal",
+      "city_filter": null,
+      "enabled": true,
+      "available_selectors": [
+        "a.btn-pay",
+        "button.course-register-now"
       ],
-      "detail_probe_max_batches": 2,
-      "wait_timeout_ms": 12000,
-      "page_timeout_ms": 45000,
-      "enabled": true
+      "booked_selectors": [
+        ".text-danger"
+      ],
+      "seats_selector": "td:nth-child(5)"
     }
   ]
 }

@@ -49,7 +49,7 @@ class TelegramNotifier:
                         raise
                     await asyncio.sleep(attempt)
 
-    async def send_alert(self, message: str, photo_path: str | None = None) -> None:
+    async def send_alert(self, message: str, photo_path: str | None = None, parse_mode: str | None = None) -> None:
         """Send an alert message, optionally with a photo."""
 
         if photo_path:
@@ -57,11 +57,14 @@ class TelegramNotifier:
             with photo_file.open("rb") as handle:
                 await self._post(
                     "sendPhoto",
-                    data={"chat_id": self.chat_id, "caption": message},
+                    data={"chat_id": self.chat_id, "caption": message, "parse_mode": parse_mode},
                     files={"photo": (photo_file.name, handle, "image/png")},
                 )
             return
-        await self._post("sendMessage", data={"chat_id": self.chat_id, "text": message})
+        payload = {"chat_id": self.chat_id, "text": message}
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
+        await self._post("sendMessage", data=payload)
 
     async def send_startup(self, targets: list[dict[str, Any]]) -> None:
         """Send a startup message listing active targets."""
@@ -93,11 +96,16 @@ class TelegramNotifier:
     ) -> None:
         """Send a heartbeat showing current target states."""
 
-        lines = [title, f"⏱ Running for {uptime_hours} hours"]
+        lines = [f"<b>{title}</b>", "", f"Monitoring {len(targets)} cities:"]
         for target in targets:
             if not target.get("enabled", True):
                 continue
             state = states.get(target["label"], {})
             status = state.get("last_status", state.get("status", "unknown"))
-            lines.append(f"📍 {target['label']}: still {status}")
-        await self.send_alert("\n".join(lines))
+            last_success = state.get("last_success_at")
+            checked = "unknown"
+            if last_success:
+                checked = last_success.replace("T", " ")[:19]
+            lines.append(f"📍 {target['label']}: {status} (checked {checked})")
+        lines.extend(["", "✅ Schedule OK"])
+        await self.send_alert("\n".join(lines), parse_mode="HTML")

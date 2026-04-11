@@ -28,11 +28,7 @@ on:
         default: false
         type: boolean
   schedule:
-    - cron: "*/5 * * * *"
-
-concurrency:
-  group: goethe-sentry-${{ github.ref }}
-  cancel-in-progress: true
+    - cron: "*/10 * * * *"
 
 permissions:
   contents: read
@@ -83,16 +79,6 @@ jobs:
 
       - name: Ensure logs directory
         run: mkdir -p logs/screenshots logs/diagnostics
-
-      - name: Random startup delay
-        run: |
-          DELAY="$(python - <<'PY'
-import random
-print(random.randint(20, 90))
-PY
-)"
-          echo "Chosen startup delay: ${DELAY}s"
-          sleep "$DELAY"
 
       - name: Run one check
         run: python check_once.py

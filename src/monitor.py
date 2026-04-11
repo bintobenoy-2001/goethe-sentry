@@ -31,6 +31,8 @@ STATE_PATH = LOG_DIR / "state.json"
 CONFIG_PATH = PROJECT_ROOT / "config" / "targets.json"
 FAILURE_ALERT_THRESHOLD = 3
 TARGET_RETRY_BACKOFFS = (5, 15)
+ONE_SHOT_HEARTBEAT_KEY = "__workflow_heartbeat__"
+ONE_SHOT_HEARTBEAT_INTERVAL_SECONDS = 3600
 
 
 class KeyValueFormatter(logging.Formatter):
@@ -193,6 +195,17 @@ def env_flag(name: str) -> bool:
     """Return true when an environment variable is set to a truthy value."""
 
     return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _parse_iso_datetime(value: str | None) -> datetime | None:
+    """Parse an ISO timestamp, tolerating bad cached values."""
+
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
 
 
 def _diagnostics_dir(label: str) -> Path:
@@ -626,6 +639,25 @@ async def run_once(config: dict[str, Any], logger: logging.Logger) -> None:
             "city_results": city_results,
         },
     )
+    if not env_flag("SENTRY_DRY_RUN"):
+        heartbeat_state = (await state_store.load()).get(ONE_SHOT_HEARTBEAT_KEY, {})
+        last_sent_at = _parse_iso_datetime(heartbeat_state.get("last_sent_at"))
+        now = datetime.now(timezone.utc)
+        should_send_heartbeat = last_sent_at is None or (
+            now - last_sent_at
+        ) >= timedelta(seconds=ONE_SHOT_HEARTBEAT_INTERVAL_SECONDS)
+        if should_send_heartbeat:
+            states = await state_store.load()
+            await notifier.send_heartbeat(targets, states, uptime_hours=0)
+            await state_store.update_aux_state(
+                ONE_SHOT_HEARTBEAT_KEY,
+                {
+                    "last_sent_at": now.isoformat(),
+                    "last_checked_centers": discovery_summary["checked_centers"],
+                    "last_results": city_results,
+                },
+            )
+            logger.info("workflow_hourly_heartbeat_sent")
     if env_flag("SENTRY_SEND_TEST_MESSAGE") and not env_flag("SENTRY_DRY_RUN"):
         result_summary = ", ".join(f"{result['label']}={result['status']}" for result in city_results) or "none"
         lines = [

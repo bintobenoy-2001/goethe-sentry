@@ -84,10 +84,16 @@ class TelegramNotifier:
         )
         await self.send_alert(message)
 
-    async def send_heartbeat(self, targets: list[dict[str, Any]], states: dict[str, dict[str, Any]], uptime_hours: int) -> None:
+    async def send_heartbeat(
+        self,
+        targets: list[dict[str, Any]],
+        states: dict[str, dict[str, Any]],
+        uptime_hours: int,
+        title: str = "🛡️ Sentry alive",
+    ) -> None:
         """Send a heartbeat showing current target states."""
 
-        lines = ["🛡️ Sentry alive", f"⏱ Running for {uptime_hours} hours"]
+        lines = [title, f"⏱ Running for {uptime_hours} hours"]
         for target in targets:
             if not target.get("enabled", True):
                 continue

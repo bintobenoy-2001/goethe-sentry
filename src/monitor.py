@@ -648,7 +648,12 @@ async def run_once(config: dict[str, Any], logger: logging.Logger) -> None:
         ) >= timedelta(seconds=ONE_SHOT_HEARTBEAT_INTERVAL_SECONDS)
         if should_send_heartbeat:
             states = await state_store.load()
-            await notifier.send_heartbeat(targets, states, uptime_hours=0)
+            await notifier.send_heartbeat(
+                targets,
+                states,
+                uptime_hours=0,
+                title="✅ Workflow schedule OK",
+            )
             await state_store.update_aux_state(
                 ONE_SHOT_HEARTBEAT_KEY,
                 {

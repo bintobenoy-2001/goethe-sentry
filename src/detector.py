@@ -128,102 +128,24 @@ def _card_seat_candidates(card: CourseCardInfo) -> list[int]:
     return candidates
 
 
-def _build_partner_summary(cards: list[CourseCardInfo]) -> tuple[str, list[str], bool, int | None]:
-    """Build a concise availability signature and message lines for partner cards."""
-
-    titles = ", ".join(card.title for card in cards if card.title)
-    batch_options = [option for card in cards for option in card.batch_options]
-    months = _extract_months(batch_options)
-    listed = batch_options[:3]
-    extra_count = max(0, len(batch_options) - len(listed))
-    all_details: list[BatchDetailInfo] = [detail for card in cards for detail in card.batch_details]
-    successful_details = [
-        detail
-        for detail in all_details
-        if detail.response_status and detail.response_status < 400 and (
-            detail.exam_dates_text
-            or detail.registration_dates_text
-            or detail.external_seats_text
-            or detail.internal_seats_text
-        )
+def extract_registration_date(text: str) -> str | None:
+    """Find and extract the registration date from text."""
+    # Specifically look for "Registration Date" or "Registration Starts on"
+    # Capture the value until the next label or newline
+    patterns = [
+        r"Registration Date[:\s]+(Not announced|[\d]{1,2}\s+[A-Za-z]+\s+[\d]{4})",
+        r"Registration Starts on[:\s]+(Not announced|[\d]{1,2}\s+[A-Za-z]+\s+[\d]{4})",
+        r"Registration Date[:\s]+(.+?)(?:\n|Exam|Fee|Seat|Center)",
     ]
-    seats_candidates = [seat for card in cards for seat in _card_seat_candidates(card)]
-    seats_count = max(seats_candidates) if seats_candidates else None
-    lines = [
-        f"🎓 Course: {titles or 'Matched course'}",
-        f"🗓 Months: {', '.join(months) if months else 'not parsed'}",
-    ]
-    if listed:
-        suffix = f" (+{extra_count} more)" if extra_count else ""
-        lines.append(f"📚 Batches: {' | '.join(listed)}{suffix}")
-    if successful_details:
-        first = successful_details[0]
-        lines.append(f"📅 Exam date: {first.exam_dates_text or first.label}")
-    elif listed:
-        lines.append(f"📅 Exam date: {listed[0]}")
-    else:
-        lines.append("📅 Exam date: not exposed")
-    if seats_count is not None:
-        lines.append(f"💺 Seats remaining: {seats_count}")
-    detail_signature = "||".join(
-        f"{detail.batch_id}:{detail.response_status}:{detail.exam_dates_text}:{detail.registration_dates_text}:{detail.external_seats_text}:{detail.internal_seats_text}"
-        for detail in all_details
-    )
-    signature = detail_signature or ("||".join(batch_options) if batch_options else titles)
-    return signature, lines, bool(successful_details), seats_count
-
-
-def _detect_partner_portal(target: dict[str, Any], page: PageResult, logger: logging.Logger) -> DetectionResult | None:
-    """Detect partner-portal availability from visible exam cards."""
-
-    if not page.exam_cards:
-        return None
-    relevant_cards = [card for card in page.exam_cards if _course_matches(card, target)]
-    if not relevant_cards:
-        logger.warning(
-            "detection_unknown_no_matching_course",
-            extra={"label": target.get("label", "unknown")},
-        )
-        return DetectionResult(
-            status="unknown",
-            confidence="low",
-            method="unknown",
-            matched="no matching course card found",
-        )
-
-    available_cards: list[CourseCardInfo] = []
-    for card in relevant_cards:
-        seat_candidates = _card_seat_candidates(card)
-        has_positive_seats = any(seat > 0 for seat in seat_candidates)
-        has_buttons = card.has_external_register or card.has_internal_register
-        has_exam_dates = bool(card.batch_options) or bool(DATE_PATTERN.search(card.text))
-        if has_buttons and has_exam_dates and (has_positive_seats or not seat_candidates) and not card.is_blocked:
-            available_cards.append(card)
-
-    if available_cards:
-        signature, summary_lines, detail_recovered, seats_count = _build_partner_summary(available_cards)
-        return DetectionResult(
-            status="available",
-            confidence="high",
-            method="button",
-            matched=", ".join(card.title for card in available_cards if card.title),
-            signature=signature,
-            summary_lines=summary_lines,
-            detail_recovered=detail_recovered,
-            seats_count=seats_count,
-        )
-
-    return DetectionResult(
-        status="booked",
-        confidence="medium",
-        method="button",
-        matched=", ".join(card.title for card in relevant_cards if card.title) or "matching course card found",
-        signature="booked",
-        summary_lines=[
-            f"🎓 Course: {', '.join(card.title for card in relevant_cards if card.title)}",
-            "📚 No bookable rows right now",
-        ],
-    )
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            val = match.group(1).strip()
+            # Clean up if it caught too much
+            if len(val) > 50:
+                val = val[:50]
+            return val
+    return None
 
 
 def _compute_page_signature(page: PageResult) -> str:
@@ -231,6 +153,52 @@ def _compute_page_signature(page: PageResult) -> str:
 
     signature_source = page.visible_text or page.page_signature_source
     return hashlib.md5(signature_source.encode("utf-8", errors="ignore")).hexdigest()
+
+
+def _detect_partner_portal(target: dict[str, Any], page: PageResult, previous_state: dict[str, Any], logger: logging.Logger) -> DetectionResult:
+    """Detect partner-portal availability from visible text and registration dates."""
+
+    text = page.visible_text
+    page_signature = _compute_page_signature(page)
+    registration_date = extract_registration_date(text)
+
+    # Step 1: Check registration date field
+    if registration_date and registration_date.lower() != "not announced":
+        # If it's a real date (has numbers), it's a high-confidence opening signal
+        if any(char.isdigit() for ch in registration_date for char in ch):
+             return DetectionResult(
+                status="available",
+                confidence="high",
+                method="registration_date",
+                matched=f"Registration date appeared: {registration_date}",
+                signature=f"reg_date:{registration_date}",
+                page_signature=page_signature,
+                summary_lines=[f"🗓️ Registration: {registration_date}"]
+            )
+
+    # Step 2: Check page signature change
+    previous_sig = previous_state.get("page_signature")
+    sig_changed = previous_sig and page_signature != previous_sig
+
+    if sig_changed:
+        return DetectionResult(
+            status="unknown",
+            confidence="low",
+            method="signature_change",
+            matched="Page content changed — registration might be opening soon",
+            signature="sig_changed",
+            page_signature=page_signature,
+        )
+
+    # Default: Not open
+    return DetectionResult(
+        status="booked",
+        confidence="high",
+        method="registration_date",
+        matched=f"Registration Date: {registration_date or 'Not announced'}",
+        signature="booked",
+        page_signature=page_signature,
+    )
 
 
 def _find_city_listing_block(text: str, city_filter: str) -> tuple[str | None, str | None, str | None]:
@@ -318,7 +286,7 @@ def _detect_goethe_listing(target: dict[str, Any], page: PageResult) -> Detectio
     )
 
 
-def detect_slot(page: PageResult, target: dict[str, Any], logger: logging.Logger) -> DetectionResult:
+def detect_slot(page: PageResult, target: dict[str, Any], previous_state: dict[str, Any], logger: logging.Logger) -> DetectionResult:
     """Classify a page as available, booked, or unknown."""
 
     if page.error:
@@ -338,9 +306,7 @@ def detect_slot(page: PageResult, target: dict[str, Any], logger: logging.Logger
         return _detect_goethe_listing(target, page)
 
     if system == "partner_portal":
-        partner_result = _detect_partner_portal(target, page, logger)
-        if partner_result is not None:
-            return partner_result
+        return _detect_partner_portal(target, page, previous_state, logger)
 
     available_selectors = target.get("available_selectors") or DEFAULT_AVAILABLE_SELECTORS
     booked_selectors = target.get("booked_selectors") or DEFAULT_BOOKED_SELECTORS

@@ -491,7 +491,7 @@ async def process_target(
             )
         return {"label": label, "status": "page_error"}
 
-    detection = detect_slot(result, target, logger)
+    detection = detect_slot(result, target, previous_state, logger)
     update = await state_store.update_target_state(
         label=label,
         status=detection.status,
@@ -516,6 +516,24 @@ async def process_target(
     )
 
     previous_page_signature = previous_state.get("page_signature")
+    if (
+        system == "partner_portal"
+        and detection.status == "unknown"
+        and detection.method == "signature_change"
+    ):
+        await notifier.send_alert(
+            "\n".join(
+                [
+                    f"⚠️ {label} page changed",
+                    "Something changed on the partner portal.",
+                    f"Check manually: {target['url']}",
+                    "Could be new exam dates or registration info.",
+                    f"⏰ Detected: {datetime.now(timezone.utc).isoformat()}",
+                ]
+            )
+        )
+        logger.warning("partner_portal_page_changed", extra={"label": label})
+
     if (
         system == "goethe_listing"
         and detection.page_signature
@@ -601,6 +619,19 @@ async def process_target(
             "",
             f"⏰ Detected: {timestamp}",
             "⚡ Act fast — slots fill in under 5 minutes!",
+        ]
+    elif system == "partner_portal" and detection.method == "registration_date":
+        registration_date = next((line.split(': ', 1)[1] for line in detection.summary_lines or [] if line.startswith('🗓️ Registration:')), 'Check portal')
+        lines = [
+            f"🚨 REGISTRATION OPENING — {label}!",
+            "",
+            "The partner portal just announced a registration date!",
+            "",
+            f"📅 Registration opens: {registration_date}",
+            f"🔗 Book here: {target['url']}",
+            f"⏰ Detected: {timestamp}",
+            "",
+            "ℹ️ Log in to see seat availability and register early!",
         ]
     else:
         lines = [

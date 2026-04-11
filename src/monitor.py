@@ -189,6 +189,12 @@ def should_rate_limit(last_alert_sent: str | None, window_seconds: int = 300) ->
     return datetime.now(timezone.utc) - last_dt < timedelta(seconds=window_seconds)
 
 
+def env_flag(name: str) -> bool:
+    """Return true when an environment variable is set to a truthy value."""
+
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _diagnostics_dir(label: str) -> Path:
     """Return the diagnostics directory for a target."""
 
@@ -620,6 +626,18 @@ async def run_once(config: dict[str, Any], logger: logging.Logger) -> None:
             "city_results": city_results,
         },
     )
+    if env_flag("SENTRY_SEND_TEST_MESSAGE") and not env_flag("SENTRY_DRY_RUN"):
+        result_summary = ", ".join(f"{result['label']}={result['status']}" for result in city_results) or "none"
+        lines = [
+            "✅ Goethe Sentry workflow test",
+            f"⏰ Completed: {datetime.now(timezone.utc).isoformat()}",
+            f"📍 Checked centers: {', '.join(discovery_summary['checked_centers']) or 'none'}",
+            f"🧪 Results: {result_summary}",
+        ]
+        if discovery_summary["missing_on_site"]:
+            lines.append(f"⚠️ Missing on site: {', '.join(discovery_summary['missing_on_site'])}")
+        await notifier.send_alert("\n".join(lines))
+        logger.info("workflow_test_message_sent")
 
 
 async def run_daemon(config: dict[str, Any], logger: logging.Logger) -> None:

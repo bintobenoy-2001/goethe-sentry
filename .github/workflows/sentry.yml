@@ -27,6 +27,11 @@ on:
         required: false
         default: false
         type: boolean
+      send_test_message:
+        description: Send a Telegram confirmation message after a manual run completes
+        required: false
+        default: false
+        type: boolean
   schedule:
     - cron: "*/10 * * * *"
 
@@ -44,6 +49,7 @@ jobs:
       SENTRY_SELECTED_CENTERS: ${{ inputs.selected_centers || '' }}
       SENTRY_LOG_LEVEL: ${{ inputs.debug_logging && 'DEBUG' || 'INFO' }}
       SENTRY_DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+      SENTRY_SEND_TEST_MESSAGE: ${{ inputs.send_test_message && 'true' || 'false' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
